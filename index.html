@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Draw & Guess — Multiplayer (Skribble-like)</title>
+<style>
+  :root{--accent:#2b7cff;--bg:#f6f8fb}
+  body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:0;background:var(--bg);color:#111}
+  header{background:white;padding:12px 16px;display:flex;gap:12px;align-items:center;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+  h1{font-size:18px;margin:0}
+  main{display:flex;gap:12px;padding:12px;flex-wrap:wrap}
+  #left{flex:1;min-width:520px;background:white;border-radius:8px;padding:12px;box-shadow:0 6px 18px rgba(0,0,0,.04)}
+  #canvas{border:2px solid #dedede;border-radius:6px;cursor:crosshair;display:block;margin:8px auto;touch-action:none}
+  #controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  input,button,select,textarea{padding:8px;border-radius:6px;border:1px solid #ddd;font-size:14px}
+  button{background:var(--accent);color:white;border:none;cursor:pointer}
+  #right{width:320px;display:flex;flex-direction:column;gap:8px}
+  .card{background:white;padding:12px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.04)}
+  ul{list-style:none;padding:0;margin:0}
+  li{padding:6px 4px;border-bottom:1px solid #f0f0f0;display:flex;justify-content:space-between;align-items:center}
+  .small{font-size:13px;color:#666}
+  #chat{height:260px;overflow:auto;padding:6px;border-radius:6px;background:#fbfcff}
+  .message{padding:6px;border-radius:6px;margin-bottom:6px}
+  .msg-me{background:#e8f4ff}
+  .msg-other{background:#f0f0f0}
+  .hint{font-weight:600;color:#2b7cff}
+  .disabled{opacity:.5;pointer-events:none}
+  .word-choice{padding:8px;border-radius:6px;border:1px solid #ddd;background:#fff;cursor:pointer}
+  .word-choice.selected{background:#2b7cff;color:white;border-color:#2b7cff}
+  footer{padding:12px;text-align:center;color:#666;font-size:13px}
+  @media (max-width:900px){ main{flex-direction:column} #right{width:100%} #left{min-width:unset} }
+</style>
+</head>
+<body>
+<header>
+  <h1>Draw & Guess — Multiplayer</h1>
+  <div style="margin-left:auto" id="gameLinkWrapper"></div>
+</header>
+
+<main>
+  <div id="left">
+    <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
+      <div style="display:flex;gap:8px;align-items:center">
+        <input id="name" placeholder="Your name" />
+        <button id="createBtn">Create Game</button>
+        <input id="joinCode" placeholder="Join code (if any)" />
+        <button id="joinBtn">Join Game</button>
+      </div>
+      <div id="gameActions" style="display:flex;gap:8px;align-items:center">
+        <button id="startBtn" class="disabled">Start Game</button>
+        <button id="nextTurnBtn" class="disabled">Next Turn</button>
+      </div>
+    </div>
+
+    <canvas id="canvas" width="800" height="450"></canvas>
+
+    <div id="controls">
+      <label class="small">Brush:</label>
+      <input id="brushSize" type="range" min="1" max="30" value="4" />
+      <label class="small">Color:</label>
+      <input id="color" type="color" value="#000000" />
+      <button id="clearBtn">Clear (drawer)</button>
+      <div style="margin-left:auto" id="roundInfo" class="small"></div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div id="wordSelectionArea" style="display:none">
+        <div class="small">Pick a word to draw:</div>
+        <div id="wordChoices" style="display:flex;gap:8px;margin-top:8px"></div>
+        <div style="margin-top:8px">
+          <button id="confirmWordBtn" class="disabled">Confirm Word</button>
+        </div>
+      </div>
+      <div id="drawerNotice" class="small" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <div id="right">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div class="small">Game Code</div>
+          <div id="code" style="font-weight:700;font-size:18px">—</div>
+        </div>
+        <div>
+          <div class="small">Players</div>
+          <div id="playersCount" style="font-weight:700">0/5</div>
+        </div>
+      </div>
+      <ul id="players"></ul>
+    </div>
+
+    <div class="card">
+      <div class="small">Chat & Guesses</div>
+      <div id="chat"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <input id="msg" placeholder="Type guess or message" style="flex:1"/>
+        <button id="sendBtn">Send</button>
+      </div>
+      <div style="margin-top:8px" class="small">Hint: <span id="hintText" class="hint">—</span></div>
+    </div>
+
+    <div class="card">
+      <div class="small">Scores</div>
+      <ul id="scores"></ul>
+    </div>
+  </div>
+</main>
+
+<footer>Share the link (Share game link) with friends — up to 5 players. Built for GitHub Pages + Firebase Realtime Database.</footer>
+
+<!-- Firebase (v8 compat for simplicity) -->
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+<script>
+/* ====== YOUR FIREBASE CONFIG (from your Firebase console) ======
+   You gave this earlier — it's been placed here unchanged.
+*/
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCUU9BPqhDn-RN0K2PEQAtX-I6UAvrG0jI",
+  authDomain: "webapp-dd7aa.firebaseapp.com",
+  databaseURL: "https://webapp-dd7aa-default-rtdb.firebaseio.com",
+  projectId: "webapp-dd7aa",
+  storageBucket: "webapp-dd7aa.firebasestorage.app",
+  messagingSenderId: "1080746612871",
+  appId: "1:1080746612871:web:1a9d063e06e0d675238022",
+  measurementId: "G-ZHE3JCC3W1"
+};
+
+// Initialize Firebase
+firebase.initializeApp(FIREBASE_CONFIG);
+const db = firebase.database();
+
+/* ---------- Utilities ---------- */
+const $ = id => document.getElementById(id);
+const uid = () => Math.random().toString(36).slice(2,9).toUpperCase();
+const genCode = () => Math.random().toString(36).slice(2,7).toUpperCase();
+function escapeHtml(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
+function timeShort(ts){ if(!ts) return ''; const d = new Date(ts); return d.getHours()+':'+String(d.getMinutes()).padStart(2,'0'); }
+function shuffle(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]] } return a }
+
+/* ---------- App state ---------- */
+let gameCode = location.hash ? location.hash.substring(1) : '';
+let playerId = uid();
+let playerName = '';
+let isDrawer = false;
+let canvas, ctx;
+let drawing = false;
+let brushSize = 4;
+let color = '#000';
+const playersLimit = 5;
+
+/* ---------- UI refs ---------- */
+const playersEl = $('players');
+const playersCountEl = $('playersCount');
+const codeEl = $('code');
+
+/* ---------- Bind UI ---------- */
+$('createBtn').onclick = createGame;
+$('joinBtn').onclick = () => joinGame($('joinCode').value.trim().toUpperCase() || gameCode);
+$('startBtn').onclick = startGame;
+$('nextTurnBtn').onclick = nextTurn;
+$('clearBtn').onclick = clearCanvasAndPush;
+$('sendBtn').onclick = sendMessage;
+$('brushSize').oninput = e => brushSize = +e.target.value;
+$('color').oninput = e => color = e.target.value;
+
+/* ---------- Canvas setup ---------- */
+canvas = $('canvas'); ctx = canvas.getContext('2d');
+ctx.lineCap = 'round';
+ctx.lineJoin = 'round';
+ctx.strokeStyle = color;
+
+function getPos(e){
+  const rect = canvas.getBoundingClientRect();
+  const clientX = (e.touches ? e.touches[0].clientX : e.clientX);
+  const clientY = (e.touches ? e.touches[0].clientY : e.clientY);
+  return { x: (clientX - rect.left) * (canvas.width/rect.width), y: (clientY - rect.top) * (canvas.height/rect.height) };
+}
+
+canvas.addEventListener('mousedown', e=>{ if(!isDrawer) return; drawing = true; const p = getPos(e); startStroke(p.x,p.y); });
+canvas.addEventListener('mouseup', ()=>{ if(!isDrawer) return; drawing = false; endStroke(); ctx.beginPath(); });
+canvas.addEventListener('mousemove', throttle(e=>{ if(!drawing || !isDrawer) return; const p = getPos(e); pushPoint(p.x,p.y); }, 16));
+
+// touch support
+canvas.addEventListener('touchstart', e=>{ e.preventDefault(); if(!isDrawer) return; drawing=true; const p=getPos(e); startStroke(p.x,p.y); });
+canvas.addEventListener('touchmove', throttle(e=>{ e.preventDefault(); if(!drawing||!isDrawer) return; const p=getPos(e); pushPoint(p.x,p.y); },16));
+canvas.addEventListener('touchend', e=>{ e.preventDefault(); if(!isDrawer) return; drawing=false; endStroke(); ctx.beginPath(); });
+
+/* ---------- Realtime DB helper ---------- */
+function gamePath(...parts){ return ['games', gameCode, ...parts].join('/') }
+
+/* ---------- Create / Join ---------- */
+function createGame(){
+  const nameVal = $('name').value.trim();
+  if(!nameVal){ alert('Enter your name'); return; }
+  playerName = nameVal;
+  gameCode = genCode();
+  location.hash = gameCode;
+  codeEl.textContent = gameCode;
+  const initial = { createdAt: Date.now(), players: {}, round: 0, turnIndex: 0, status: 'waiting', strokesIndex: 0, meta:{} };
+  db.ref(gamePath()).set(initial).then(()=> joinGame(gameCode));
+}
+
+function joinGame(code){
+  const nameVal = $('name').value.trim();
+  if(!nameVal){ alert('Enter your name'); return; }
+  playerName = nameVal;
+  gameCode = code || genCode();
+  location.hash = gameCode;
+  codeEl.textContent = gameCode;
+
+  const playersRef = db.ref(gamePath('players'));
+  playersRef.once('value').then(snap=>{
+    const players = snap.val() || {};
+    if(Object.keys(players).length >= playersLimit && !players[playerId]){
+      alert('Game full (max 5 players).');
+      return;
+    }
+    playersRef.child(playerId).set({ id: playerId, name: playerName, score: 0, joinedAt: Date.now() });
+    attachListeners();
+    updateLinkArea();
+  });
+}
+
+/* ---------- DB Listeners ---------- */
+let listenersAttached = false;
+function attachListeners(){
+  if(listenersAttached) return;
+  listenersAttached = true;
+
+  db.ref(gamePath('players')).on('value', snap=>{
+    const players = snap.val() || {};
+    renderPlayers(players);
+  });
+
+  db.ref(gamePath()).on('value', snap=>{
+    const data = snap.val() || {};
+    renderGameState(data);
+  });
+
+  db.ref(gamePath('strokes')).on('child_added', snap=>{
+    const seg = snap.val();
+    if(!seg) return;
+    drawSegmentLocal(seg, false);
+  });
+
+  db.ref(gamePath('chat')).on('child_added', snap=>{
+    const msg = snap.val();
+    if(!msg) return;
+    appendChat(msg);
+  });
+
+  db.ref(gamePath('meta')).on('value', snap=>{
+    const meta = snap.val() || {};
+    if(meta && meta.clearCanvas){ ctx.clearRect(0,0,canvas.width,canvas.height); db.ref(gamePath('meta/clearCanvas')).remove(); }
+  });
+}
+
+/* ---------- Rendering ---------- */
+function renderPlayers(playersMap){
+  playersEl.innerHTML = '';
+  const arr = Object.values(playersMap || {});
+  arr.sort((a,b)=> (b.score||0) - (a.score||0));
+  for(const p of arr){
+    const li = document.createElement('li');
+    li.innerHTML = `<span>${escapeHtml(p.name)}</span><span>${p.score||0}</span>`;
+    playersEl.appendChild(li);
+  }
+  playersCountEl.textContent = `${arr.length}/${playersLimit}`;
+  renderScores(arr);
+}
+
+function renderScores(arr){
+  const el = $('scores'); el.innerHTML = '';
+  for(const p of arr){
+    const li = document.createElement('li'); li.textContent = `${p.name} — ${p.score||0}`; el.appendChild(li);
+  }
+}
+
+function renderGameState(state){
+  if(!state) return;
+  $('roundInfo').textContent = `Round ${state.round || 0}`;
+  codeEl.textContent = gameCode;
+
+  const players = state.players || {};
+  const playerIds = Object.keys(players);
+  if(playerIds.length === 0) return;
+
+  const turnIndex = state.turnIndex || 0;
+  const drawerId = playerIds[turnIndex % playerIds.length];
+  isDrawer = (drawerId === playerId);
+  doDrawerUI(isDrawer, players[drawerId]);
+
+  // show hint (masked word if chosen)
+  const hintText = $('hintText');
+  if(state.currentWord && state.drawer === drawerId){
+    if(isDrawer){
+      hintText.textContent = state.currentWord;
+    } else {
+      hintText.textContent = state.currentWord.split('').map((c,i)=> c===' ' ? ' ' : (i%2? c : '_')).join('');
+    }
+  } else {
+    hintText.textContent = '—';
+  }
+
+  // disable/enable next turn button
+  const nextBtn = $('nextTurnBtn');
+  if(isDrawer && state.status === 'playing'){
+    nextBtn.classList.remove('disabled');
+  } else nextBtn.classList.add('disabled');
+}
+
+/* ---------- Drawer UI & Word selection ---------- */
+function doDrawerUI(isDrawerFlag, drawerPlayer){
+  const wsArea = $('wordSelectionArea');
+  const choicesWrap = $('wordChoices');
+  const confirmBtn = $('confirmWordBtn');
+  const drawerNotice = $('drawerNotice');
+  if(isDrawerFlag){
+    $('canvas').style.borderColor = '#2b7cff';
+    drawerNotice.textContent = 'You are the drawer — choose a word and draw!';
+    // if currentWord not set, show choice UI
+    db.ref(gamePath('currentWord')).once('value').then(s=>{
+      if(!s.exists()){
+        // generate 3 choices
+        const pool = ['apple','car','house','dog','cat','tree','sun','book','phone','bicycle','pizza','flower','boat','rocket','butterfly','guitar','clock','chair','cup','train','pizza','camera','shoe'];
+        shuffle(pool);
+        const choices = [pool[0], pool[1], pool[2]];
+        choicesWrap.innerHTML = '';
+        choices.forEach(w=>{
+          const div = document.createElement('div');
+          div.className = 'word-choice';
+          div.textContent = w;
+          div.onclick = ()=> {
+            Array.from(choicesWrap.children).forEach(c=>c.classList.remove('selected'));
+            div.classList.add('selected');
+            confirmBtn.classList.remove('disabled');
+            confirmBtn.dataset.choice = w;
+          };
+          choicesWrap.appendChild(div);
+        });
+        wsArea.style.display = 'block';
+      } else {
+        wsArea.style.display = 'none';
+      }
+    });
+  } else {
+    $('canvas').style.borderColor = '#dedede';
+    drawerNotice.textContent = drawerPlayer ? `${drawerPlayer.name} is drawing` : 'Waiting for drawer';
+    $('wordSelectionArea').style.display = 'none';
+  }
+}
+
+$('confirmWordBtn').onclick = ()=>{
+  if($('confirmWordBtn').classList.contains('disabled')) return;
+  const pick = $('confirmWordBtn').dataset.choice;
+  if(!pick) return;
+  db.ref(gamePath()).update({ currentWord: pick, drawer: playerId });
+  db.ref(gamePath('strokes')).remove();
+  db.ref(gamePath('chat')).push({ from:'SYSTEM', text:`Drawer selected a word. Start guessing!`, ts: Date.now() });
+  $('wordSelectionArea').style.display = 'none';
+};
+
+/* ---------- Start / Next Turn ---------- */
+function startGame(){
+  db.ref(gamePath()).once('value').then(snap=>{
+    const data = snap.val() || {};
+    if(data.status === 'playing'){ alert('Already playing'); return; }
+    db.ref(gamePath()).update({ status: 'playing', round: 1, turnIndex: 0 });
+    db.ref(gamePath('chat')).push({ from: 'SYSTEM', text: 'Game started. Turn 1.' , ts: Date.now() });
+  });
+}
+
+function nextTurn(){
+  db.ref(gamePath()).once('value').then(snap=>{
+    const state = snap.val()||{};
+    const players = state.players || {};
+    const ids = Object.keys(players);
+    if(ids.length === 0) return;
+    let ti = (state.turnIndex || 0) + 1;
+    let round = state.round || 1;
+    if(ti >= ids.length){ ti = 0; round = round+1; }
+    db.ref(gamePath()).update({ turnIndex: ti, round: round, currentWord: null, drawer: null });
+    db.ref(gamePath('strokes')).remove();
+    db.ref(gamePath('meta')).set({ clearCanvas: true });
+    db.ref(gamePath('chat')).push({ from:'SYSTEM', text:`Next turn. Round ${round}`, ts: Date.now() });
+  });
+}
+
+/* ---------- Drawing syncing ---------- */
+let currentStrokeKey = null;
+function startStroke(x,y){
+  const stroke = { author: playerId, size: +brushSize, color: color, points: [[x,y]], ts: Date.now() };
+  const refSeg = db.ref(gamePath('strokes')).push(stroke);
+  currentStrokeKey = refSeg.key;
+}
+
+function pushPoint(x,y){
+  if(!currentStrokeKey) return;
+  db.ref(gamePath('strokes/' + currentStrokeKey + '/points').transaction(points=>{
+    if(points) points.push([x,y]); else points = [[x,y]];
+    return points;
+  }));
+}
+
+function endStroke(){
+  currentStrokeKey = null;
+}
+
+function drawSegmentLocal(seg, fromLocal=true){
+  if(!seg.points || seg.points.length === 0) return;
+  ctx.lineWidth = seg.size || 3;
+  ctx.beginPath();
+  ctx.moveTo(seg.points[0][0], seg.points[0][1]);
+  for(let i=1;i<seg.points.length;i++){
+    ctx.lineTo(seg.points[i][0], seg.points[i][1]);
+  }
+  ctx.strokeStyle = seg.color || '#000';
+  ctx.stroke();
+}
+
+/* Clear canvas button (only drawer) */
+function clearCanvasAndPush(){
+  if(!isDrawer) return alert('Only current drawer can clear.');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  db.ref(gamePath('strokes')).remove();
+  db.ref(gamePath('meta')).set({ clearCanvas: true });
+  setTimeout(()=> db.ref(gamePath('meta/clearCanvas')).remove(), 800);
+}
+
+/* ---------- Chat & guesses ---------- */
+function sendMessage(){
+  const text = $('msg').value.trim();
+  if(!text) return;
+  const payload = { from: playerName, id: playerId, text, ts: Date.now() };
+  db.ref(gamePath('chat')).push(payload);
+  $('msg').value = '';
+  // check guess
+  db.ref(gamePath('currentWord')).once('value').then(s=>{
+    const word = s.val();
+    if(word && text.trim().toLowerCase() === word.toLowerCase() && !isDrawer){
+      awardPoints(playerId, playerName);
+    }
+  });
+}
+
+function appendChat(msg){
+  const c = $('chat');
+  const div = document.createElement('div'); div.className = 'message ' + ((msg.id===playerId)?'msg-me':'msg-other');
+  const who = (msg.from === 'SYSTEM') ? '[SYSTEM]' : escapeHtml(msg.from || msg.id || 'Anon');
+  div.innerHTML = `<div style="font-size:12px;color:#555">${who} <span class="small" style="float:right">${timeShort(msg.ts)}</span></div><div>${escapeHtml(msg.text)}</div>`;
+  c.appendChild(div); c.scrollTop = c.scrollHeight;
+}
+
+/* Award points when someone guesses correctly */
+function awardPoints(winnerId, winnerName){
+  db.ref(gamePath()).transaction(state=>{
+    if(!state) return state;
+    if(!state.currentWord) return state; // already awarded
+    const players = state.players || {};
+    if(players[winnerId] && !players[winnerId].guessedRound){
+      players[winnerId].score = (players[winnerId].score||0) + 10;
+      const drawerId = state.drawer;
+      if(drawerId && players[drawerId]){
+        players[drawerId].score = (players[drawerId].score||0) + 5;
+      }
+      // mark guessedRound to avoid double award in this simple impl
+      players[winnerId].guessedRound = true;
+      state.players = players;
+      state.currentWord = null;
+      db.ref(gamePath('chat')).push({ from:'SYSTEM', text: `${winnerName} guessed correctly!`, ts: Date.now() });
+    }
+    return state;
+  });
+}
+
+/* ---------- Helpers ---------- */
+function throttle(fn, wait){ let last=0; return function(...a){ const now = Date.now(); if(now-last>wait){ last=now; fn(...a); } } }
+
+/* ---------- Auto-join if hash present ---------- */
+if(location.hash){
+  const h = location.hash.substring(1).toUpperCase();
+  if(h) { $('joinCode').value = h; joinGame(h); }
+}
+
+/* show copy link */
+function updateLinkArea(){
+  const wrap = $('gameLinkWrapper');
+  wrap.innerHTML = '';
+  if(!gameCode) return;
+  const lnk = document.createElement('a');
+  const url = location.origin + location.pathname + '#' + gameCode;
+  lnk.href = url; lnk.target='_blank'; lnk.textContent = 'Share game link';
+  wrap.appendChild(lnk);
+}
+setInterval(updateLinkArea,1000);
+
+/* Basic cleanup on unload */
+window.addEventListener('beforeunload', ()=>{
+  if(gameCode){
+    db.ref(gamePath('players', playerId)).remove();
+  }
+});
+</script>
+</body>
+</html>
